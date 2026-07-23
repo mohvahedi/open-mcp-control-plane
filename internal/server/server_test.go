@@ -23,9 +23,10 @@ func testServer(t *testing.T, packages ...catalog.Package) http.Handler {
 	t.Cleanup(func() { _ = repo.Close() })
 	source := catalog.NewStaticSource("test", packages)
 	cfg := config.Config{
-		Version:         "test",
-		RequestTimeout:  2 * time.Second,
-		GatewayBindPath: "/gateway",
+		Version:          "test",
+		RequestTimeout:   2 * time.Second,
+		GatewayBindPath:  "/gateway",
+		SecretsMasterKey: "unit-test-master-key",
 	}
 	return New(cfg, catalog.NewService(source), repo, runtime.NewFakeRuntime())
 }

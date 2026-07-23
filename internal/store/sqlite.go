@@ -454,6 +454,15 @@ func (r *SQLiteRepository) CreateSecretReference(ctx context.Context, ref domain
 	return ref, err
 }
 
+func (r *SQLiteRepository) GetSecretCipher(ctx context.Context, id string) (string, error) {
+	var cipher string
+	err := r.db.QueryRowContext(ctx, `SELECT secret_cipher FROM secret_references WHERE id=?`, id).Scan(&cipher)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return cipher, err
+}
+
 func (r *SQLiteRepository) ListSecretReferences(ctx context.Context) ([]domain.SecretReference, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,description,created_at FROM secret_references ORDER BY created_at DESC`)
 	if err != nil {

@@ -20,6 +20,7 @@ An open-source, self-hosted control plane for discovering, evaluating, deploying
 - Embedded operator dashboard
 - `mcpctl` CLI
 - Management MCP endpoint (`POST /mcp/management`)
+- AES-GCM encrypted secret references (`OPENMCP_SECRETS_MASTER_KEY`)
 
 ## Quick start
 
@@ -53,9 +54,13 @@ API/GUI: `http://127.0.0.1:8080`
 
 - `GET /healthz`, `GET /readyz`, `GET /v1/info`
 - `GET /v1/catalog/search`, `GET /v1/catalog/packages/{id}`, `GET /v1/catalog/sources/status`
-- Admin: `/v1/admin/plans`, `/approvals`, `/installations`, `/profiles`, `/clients`, `/audit`, `/gateway/status`
+- Admin: `/v1/admin/plans`, `/approvals`, `/installations`, `/profiles`, `/clients`, `/secrets`, `/audit`, `/gateway/status`
 - Gateway: `GET /gateway/tools`, `POST /gateway/invoke`
 - Management MCP: `POST /mcp/management`
+
+## Secrets
+
+Set `OPENMCP_SECRETS_MASTER_KEY` to encrypt secret references at rest (AES-GCM). List/create APIs never return plaintext values.
 
 ## Security notes
 
@@ -69,7 +74,7 @@ See [docs/security.md](docs/security.md) and [SECURITY.md](SECURITY.md).
 ## Roadmap
 
 1. Full Streamable HTTP MCP transport parity and richer gateway protocol support
-2. Stronger secret encryption backend and OIDC identity
+2. OIDC identity and production secret backends
 3. Production GUI polish and package risk scoring
 4. Update/rollback workflows and image scanning
 5. Skills package model and ToolHive catalog federation
