@@ -70,6 +70,34 @@ API/GUI: `http://127.0.0.1:8080`
 
 Set `OPENMCP_SECRETS_MASTER_KEY` to encrypt secret references at rest (AES-GCM). List/create APIs never return plaintext values.
 
+
+## Authentication & secrets
+
+Admin API auth accepts any of:
+- Bootstrap admin bearer token (`OPENMCP_BOOTSTRAP_ADMIN_TOKEN`)
+- OIDC browser login (`/v1/auth/oidc/login`) minting an `openmcp_admin_session` cookie
+- Bearer OIDC ID token or signed session token
+
+OIDC env vars (optional):
+```bash
+OPENMCP_OIDC_ENABLED=true
+OPENMCP_OIDC_ISSUER_URL=https://accounts.example.com
+OPENMCP_OIDC_CLIENT_ID=...
+OPENMCP_OIDC_CLIENT_SECRET=...
+OPENMCP_OIDC_REDIRECT_URL=https://cp.example.com/v1/auth/oidc/callback
+OPENMCP_OIDC_ALLOWED_EMAILS=you@example.com
+```
+
+Secrets backends (`OPENMCP_SECRETS_BACKEND`):
+- `local` (default) — AES-GCM with `OPENMCP_SECRETS_MASTER_KEY`
+- `env` — process/env injected values (`OPENMCP_SECRET_<ID>`)
+- `file` — files under `OPENMCP_SECRETS_FILE_DIR`
+
+Gateway sessions:
+- `POST /gateway/mcp` initialize returns `Mcp-Session-Id`
+- `GET /gateway/mcp` with `Accept: text/event-stream` opens SSE
+- `DELETE /gateway/mcp` with `Mcp-Session-Id` ends the session
+
 ## Security notes
 
 - Secrets and tokens are never returned by list/read endpoints
@@ -81,12 +109,18 @@ See [docs/security.md](docs/security.md) and [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
-1. ~~Full Streamable HTTP MCP transport parity~~ (v0.1 partial: initialize/tools/list/tools/call)
-2. OIDC identity and production secret backends
-3. Production GUI polish (risk scoring APIs shipped)
+1. ~~Full Streamable HTTP MCP transport parity~~ (v0.1: initialize/tools/list/tools/call + sessions)
+2. ~~OIDC identity and production secret backends~~ (local AES / env / file backends; OIDC login + session tokens)
+3. ~~Production GUI polish~~ (sectioned operator UI: marketplace, ops, gateway/sessions, skills, secrets)
 4. ~~Update/rollback workflows + heuristic image scanning / package risk scoring~~
 5. ~~Skills package model and ToolHive catalog federation~~
-6. SSE streaming responses and full session lifecycle for long-running tools
+6. ~~SSE streaming responses and full session lifecycle for long-running tools~~
+
+### Optional next
+- Real Docker runtime on production VPS + Compose installer polish
+- PostgreSQL production store
+- Official MCP Registry deeper federation
+- OpenTelemetry metrics/traces
 
 ## License
 

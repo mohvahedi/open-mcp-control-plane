@@ -30,9 +30,24 @@ type Server struct {
 	scanner    scanner.Scanner
 	mux        *http.ServeMux
 	httpClient *http.Client
+	secrets    security.SecretBackend
+	oidc       *security.OIDCAuthenticator
+	sessions   *sessionHub
 }
 
 func New(cfg config.Config, catalogService *catalog.Service, repo store.Repository, rt runtime.Runtime) http.Handler {
+	return NewWithOptions(cfg, catalogService, repo, rt, nil, nil)
+}
+
+// NewWithOptions wires optional OIDC and secret backends (production identity + secrets).
+func NewWithOptions(cfg config.Config, catalogService *catalog.Service, repo store.Repository, rt runtime.Runtime, secrets security.SecretBackend, oidcAuth *security.OIDCAuthenticator) http.Handler {
+	if secrets == nil {
+		b, err := security.NewLocalAESBackend(cfg.SecretsMasterKey)
+		if err != nil {
+			panic(err)
+		}
+		secrets = b
+	}
 	s := &Server{
 		config:     cfg,
 		catalog:    catalogService,
@@ -41,6 +56,9 @@ func New(cfg config.Config, catalogService *catalog.Service, repo store.Reposito
 		scanner:    scanner.NewHeuristic(),
 		mux:        http.NewServeMux(),
 		httpClient: &http.Client{Timeout: cfg.RequestTimeout},
+		secrets:    secrets,
+		oidc:       oidcAuth,
+		sessions:   newSessionHub(cfg.MCPSessionTTL),
 	}
 	s.routes()
 	return s.withDefaults(s.mux)
@@ -52,6 +70,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.ready)
 	s.mux.HandleFunc("GET /v1/info", s.info)
 	s.mux.HandleFunc("GET /v1/csrf", s.csrf)
+	// auth / OIDC
+	s.mux.HandleFunc("GET /v1/auth/status", s.authStatus)
+	s.mux.HandleFunc("GET /v1/auth/oidc/login", s.oidcLogin)
+	s.mux.HandleFunc("GET /v1/auth/oidc/callback", s.oidcCallback)
+	s.mux.HandleFunc("POST /v1/auth/logout", s.authLogout)
 	// catalog discovery
 	s.mux.HandleFunc("GET /v1/catalog/search", s.searchCatalog)
 	s.mux.HandleFunc("GET /v1/catalog/packages/{id}", s.inspectPackage)
@@ -86,6 +109,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/admin/clients/{id}/revoke", s.withAdminAuth(s.revokeClient))
 	s.mux.HandleFunc("GET /v1/admin/audit", s.withAdminAuth(s.listAudit))
 	s.mux.HandleFunc("GET /v1/admin/gateway/status", s.withAdminAuth(s.gatewayStatus))
+	s.mux.HandleFunc("GET /v1/admin/sessions", s.withAdminAuth(s.listMCPSessions))
+	s.mux.HandleFunc("DELETE /v1/admin/sessions/{id}", s.withAdminAuth(s.deleteMCPSession))
+	s.mux.HandleFunc("GET /v1/admin/secrets/backend", s.withAdminAuth(s.secretsBackendInfo))
 	s.mux.HandleFunc("GET /v1/admin/secrets", s.withAdminAuth(s.listSecrets))
 	s.mux.HandleFunc("POST /v1/admin/secrets", s.withAdminAuth(s.createSecret))
 	s.mux.HandleFunc("GET /v1/admin/skills", s.withAdminAuth(s.listSkills))
@@ -124,6 +150,12 @@ func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
 		"name":    "open-mcp-control-plane",
 		"version": s.config.Version,
 		"status":  "v0.1-mvp",
+		"features": map[string]any{
+			"oidc":            s.oidc != nil && s.oidc.Enabled(),
+			"secrets_backend": s.secrets.Name(),
+			"sse_sessions":    true,
+			"skills":          true,
+		},
 	})
 }
 
@@ -754,15 +786,19 @@ func (s *Server) gatewayStatus(w http.ResponseWriter, r *http.Request) {
 		"profiles":      len(prof),
 		"clients":       len(clients),
 		"skills":        len(skills),
+		"sessions":      s.sessions.count(),
 		"path":          "/gateway",
 		"endpoints": map[string]string{
 			"rest_tools":      "GET /gateway/tools",
 			"rest_invoke":     "POST /gateway/invoke",
 			"streamable_http": "POST /gateway/mcp",
+			"sse":             "GET /gateway/mcp (Accept: text/event-stream)",
 			"profile_mcp":     "POST /mcp/profiles/{name}",
 		},
-		"transport": "streamable-http",
-		"protocol":  "2024-11-05",
+		"transport":       "streamable-http+sse",
+		"protocol":        "2024-11-05",
+		"secrets_backend": s.secrets.Name(),
+		"oidc_enabled":    s.oidc != nil && s.oidc.Enabled(),
 	})
 }
 
@@ -914,41 +950,38 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and value are required"})
 		return
 	}
-	key, err := security.DeriveKey(s.config.SecretsMasterKey)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "invalid secrets master key"})
-		return
-	}
-	ciphertext, err := security.EncryptSecret(key, req.Value)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encrypt secret"})
-		return
-	}
 	ref := domain.SecretReference{
 		ID:          newID("sec"),
 		Name:        req.Name,
 		Description: req.Description,
 		CreatedAt:   time.Now().UTC(),
 	}
-	stored, err := s.repo.CreateSecretReference(r.Context(), ref, ciphertext)
+	locator, err := s.secrets.Put(r.Context(), ref.ID, req.Value)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store secret in backend"})
+		return
+	}
+	stored, err := s.repo.CreateSecretReference(r.Context(), ref, locator)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to store secret reference"})
 		return
 	}
-	s.audit(r.Context(), "admin", "create_secret", stored.ID, "ok", map[string]any{"name": stored.Name})
+	s.audit(r.Context(), "admin", "create_secret", stored.ID, "ok", map[string]any{"name": stored.Name, "backend": s.secrets.Name()})
 	// Never return plaintext value.
 	writeJSON(w, http.StatusCreated, stored)
 }
 
+func (s *Server) secretsBackendInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"backend": s.secrets.Name(),
+		"configured": s.config.SecretsBackend,
+	})
+}
+
 func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		hash, err := s.repo.GetAdminHash(r.Context())
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "admin not initialized"})
-			return
-		}
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if token == "" || !security.VerifyToken(hash, token) {
+		actor, ok := s.authenticateAdmin(r)
+		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -958,8 +991,127 @@ func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		r = r.WithContext(context.WithValue(r.Context(), adminActorKey{}, actor))
 		next(w, r)
 	}
+}
+
+type adminActorKey struct{}
+
+func (s *Server) authenticateAdmin(r *http.Request) (string, bool) {
+	token := security.BearerToken(r)
+	if token == "" {
+		if c, err := r.Cookie("openmcp_admin_session"); err == nil {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		return "", false
+	}
+	// 1) Bootstrap admin token hash
+	if hash, err := s.repo.GetAdminHash(r.Context()); err == nil && security.VerifyToken(hash, token) {
+		return "admin-token", true
+	}
+	// 2) OIDC post-login session token
+	if id, err := security.VerifySessionToken(s.config.SessionHMACSecret, token); err == nil {
+		actor := id.Email
+		if actor == "" {
+			actor = id.Subject
+		}
+		return "oidc:" + actor, true
+	}
+	// 3) Raw OIDC ID token (API clients)
+	if s.oidc != nil && s.oidc.Enabled() {
+		if id, err := s.oidc.VerifyIDToken(r.Context(), token); err == nil {
+			actor := id.Email
+			if actor == "" {
+				actor = id.Subject
+			}
+			return "oidc:" + actor, true
+		}
+	}
+	return "", false
+}
+
+func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.authenticateAdmin(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated": ok,
+		"actor":         actor,
+		"oidc_enabled":  s.oidc != nil && s.oidc.Enabled(),
+		"secrets_backend": s.secrets.Name(),
+	})
+}
+
+func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
+	if s.oidc == nil || !s.oidc.Enabled() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "oidc disabled"})
+		return
+	}
+	authURL, state, err := s.oidc.AuthCodeURL()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "openmcp_oidc_state", Value: state, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: 600,
+	})
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
+	if s.oidc == nil || !s.oidc.Enabled() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "oidc disabled"})
+		return
+	}
+	stateCookie, err := r.Cookie("openmcp_oidc_state")
+	if err != nil || stateCookie.Value == "" || r.URL.Query().Get("state") != stateCookie.Value {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid oauth state"})
+		return
+	}
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing code"})
+		return
+	}
+	id, _, err := s.oidc.Exchange(r.Context(), code, stateCookie.Value)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	sess, err := security.MintSessionToken(s.config.SessionHMACSecret, id, s.config.OIDCSessionTTL)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to mint session"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "openmcp_admin_session", Value: sess, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: int(s.config.OIDCSessionTTL.Seconds()),
+	})
+	// clear state cookie
+	http.SetCookie(w, &http.Cookie{Name: "openmcp_oidc_state", Value: "", Path: "/", MaxAge: -1})
+	s.audit(r.Context(), "oidc:"+id.Email, "oidc_login", id.Subject, "ok", map[string]any{"email": id.Email})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "openmcp_admin_session", Value: "", Path: "/", MaxAge: -1})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}
+
+func (s *Server) listMCPSessions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.sessions.list(), "count": s.sessions.count()})
+}
+
+func (s *Server) deleteMCPSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.sessions.delete(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	s.audit(r.Context(), "admin", "delete_mcp_session", id, "ok", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (s *Server) withClientAuth(next func(http.ResponseWriter, *http.Request, domain.Client, domain.Profile)) http.HandlerFunc {
