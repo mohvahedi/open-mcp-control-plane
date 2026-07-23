@@ -16,7 +16,7 @@ type Repository interface {
 	GetDeploymentPlan(context.Context, string) (domain.DeploymentPlan, error)
 	ListDeploymentPlans(context.Context) ([]domain.DeploymentPlan, error)
 
-	CreateApproval(context.Context, domain.Approval) (domain.Approval, error)
+	CreateApproval(context.Context, domain.Approval) (domain.Approval, bool, error)
 	GetApprovalByPlanID(context.Context, string) (domain.Approval, bool, error)
 	ListApprovals(context.Context) ([]domain.Approval, error)
 
@@ -39,6 +39,7 @@ type Repository interface {
 	RevokeClient(context.Context, string) error
 
 	CreateSecretReference(context.Context, domain.SecretReference, string) (domain.SecretReference, error)
+	GetSecretCipher(context.Context, string) (string, error)
 	ListSecretReferences(context.Context) ([]domain.SecretReference, error)
 
 	CreateAuditEvent(context.Context, domain.AuditEvent) (domain.AuditEvent, error)

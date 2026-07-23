@@ -21,6 +21,7 @@ type Config struct {
 	UseFakeRuntime      bool
 	DockerBinary        string
 	GatewayBindPath     string
+	SecretsMasterKey    string
 }
 
 func Load() Config {
@@ -37,6 +38,7 @@ func Load() Config {
 		UseFakeRuntime:      envBoolOr("OPENMCP_USE_FAKE_RUNTIME", false),
 		DockerBinary:        envOr("OPENMCP_DOCKER_BINARY", "docker"),
 		GatewayBindPath:     envOr("OPENMCP_GATEWAY_PATH", "/gateway"),
+		SecretsMasterKey:    envOr("OPENMCP_SECRETS_MASTER_KEY", "dev-only-change-me"),
 	}
 }
 
@@ -57,6 +59,9 @@ func (c Config) Validate() error {
 	}
 	if c.RegistryPageLimit <= 0 || c.RegistryPageLimit > 100 {
 		return errors.New("registry page limit must be between 1 and 100")
+	}
+	if c.SecretsMasterKey == "" {
+		return errors.New("secrets master key is required")
 	}
 	return nil
 }
