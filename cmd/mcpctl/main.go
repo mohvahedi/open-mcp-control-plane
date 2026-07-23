@@ -79,6 +79,17 @@ func run(args []string) error {
 			return err
 		}
 		return client.postPrintAuth("/v1/admin/installations/"+args[1]+"/update", body)
+	case "scan":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl scan <image>")
+		}
+		body, _ := json.Marshal(map[string]string{"image": args[1]})
+		return client.postPrintAuth("/v1/admin/scan/image", body)
+	case "risk":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl risk <package-id>")
+		}
+		return client.getPrint("/v1/catalog/packages/" + args[1] + "/risk")
 	case "rollback":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: mcpctl rollback <installation-id>")
@@ -298,6 +309,8 @@ Commands:
   approval create <plan-id> <reason>
   install apply <plan-id> | list | health|logs|start|stop|restart|disable|uninstall <id>
   list
+  scan <image>                     Heuristic image risk scan
+  risk <package-id>                Package risk score
   update <installation-id> [image]
   rollback <installation-id>
   profile create <name> | list | add <profile-id> <installation-ids> | tools <profile-id> <tools>
