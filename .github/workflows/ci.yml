@@ -16,8 +16,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
-          cache: false
-      - run: gofmt -d -e . | tee /tmp/gofmt.diff && test ! -s /tmp/gofmt.diff
+          cache: true
+      - run: gofmt -l . | tee /tmp/gofmt.out && test ! -s /tmp/gofmt.out
       - run: go vet ./...
-      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go test ./...
+      - run: go test -race ./...
       - run: go build ./cmd/controlplane
+      - run: go build ./cmd/mcpctl
