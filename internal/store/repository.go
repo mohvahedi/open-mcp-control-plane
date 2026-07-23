@@ -44,4 +44,13 @@ type Repository interface {
 
 	CreateAuditEvent(context.Context, domain.AuditEvent) (domain.AuditEvent, error)
 	ListAuditEvents(context.Context, int) ([]domain.AuditEvent, error)
+
+	CreateSkill(context.Context, domain.Skill) (domain.Skill, error)
+	GetSkill(context.Context, string) (domain.Skill, error)
+	ListSkills(context.Context) ([]domain.Skill, error)
+	DeleteSkill(context.Context, string) error
+
+	BindSkill(context.Context, domain.SkillBinding) (domain.SkillBinding, error)
+	ListSkillBindings(context.Context, string) ([]domain.SkillBinding, error) // by profile ID; empty = all
+	UnbindSkill(context.Context, string) error
 }

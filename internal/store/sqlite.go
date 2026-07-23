@@ -112,6 +112,32 @@ func (r *SQLiteRepository) migrate(ctx context.Context) error {
 			secret_cipher TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS skills (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			version TEXT,
+			source TEXT NOT NULL,
+			kind TEXT,
+			license TEXT,
+			tags TEXT NOT NULL,
+			entry_point TEXT,
+			content TEXT,
+			tools TEXT NOT NULL,
+			requires TEXT NOT NULL,
+			provenance TEXT NOT NULL,
+			labels TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS skill_bindings (
+			id TEXT PRIMARY KEY,
+			profile_id TEXT NOT NULL,
+			skill_id TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			UNIQUE(profile_id, skill_id)
+		);`,
 		`CREATE TABLE IF NOT EXISTS audit_events (
 			id TEXT PRIMARY KEY,
 			actor TEXT NOT NULL,

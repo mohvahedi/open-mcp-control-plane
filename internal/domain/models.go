@@ -111,3 +111,33 @@ type AuditEvent struct {
 	ProfileID  string         `json:"profile_id,omitempty"`
 	ClientID   string         `json:"client_id,omitempty"`
 }
+
+// Skill is a reusable agent capability package (prompt/tool bundle) that can be
+// discovered, versioned, approved, and attached to profiles alongside MCP servers.
+type Skill struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Version     string            `json:"version,omitempty"`
+	Source      string            `json:"source"`
+	Kind        string            `json:"kind,omitempty"` // prompt | tool-bundle | hybrid
+	License     string            `json:"license,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	EntryPoint  string            `json:"entry_point,omitempty"`
+	Content     string            `json:"content,omitempty"` // prompt or skill markdown
+	Tools       []ToolMetadata    `json:"tools,omitempty"`
+	Requires    []string          `json:"requires,omitempty"` // package/skill IDs
+	Provenance  map[string]any    `json:"provenance,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// SkillBinding attaches a skill to a profile with optional tool allowlist override.
+type SkillBinding struct {
+	ID        string    `json:"id"`
+	ProfileID string    `json:"profile_id"`
+	SkillID   string    `json:"skill_id"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
