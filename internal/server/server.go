@@ -69,6 +69,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/admin/installations/{id}/restart", s.withAdminAuth(s.installationRestart))
 	s.mux.HandleFunc("POST /v1/admin/installations/{id}/disable", s.withAdminAuth(s.installationDisable))
 	s.mux.HandleFunc("POST /v1/admin/installations/{id}/uninstall", s.withAdminAuth(s.installationUninstall))
+	s.mux.HandleFunc("POST /v1/admin/installations/{id}/update", s.withAdminAuth(s.installationUpdate))
+	s.mux.HandleFunc("POST /v1/admin/installations/{id}/rollback", s.withAdminAuth(s.installationRollback))
 	s.mux.HandleFunc("GET /v1/admin/profiles", s.withAdminAuth(s.listProfiles))
 	s.mux.HandleFunc("POST /v1/admin/profiles", s.withAdminAuth(s.createProfile))
 	s.mux.HandleFunc("POST /v1/admin/profiles/{id}/installations", s.withAdminAuth(s.profileInstallations))
@@ -359,6 +361,175 @@ func (s *Server) installationUninstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
+func (s *Server) installationUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	inst, err := s.repo.GetInstallation(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "installation not found"})
+		return
+	}
+	var req struct {
+		Image  string `json:"image"`
+		PlanID string `json:"plan_id"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+	}
+
+	plan, planErr := s.repo.GetDeploymentPlan(r.Context(), inst.PlanID)
+	if planErr != nil && req.PlanID != "" {
+		plan, planErr = s.repo.GetDeploymentPlan(r.Context(), req.PlanID)
+	}
+	image := req.Image
+	if image == "" && planErr == nil {
+		image = plan.Image
+	}
+	if image == "" {
+		if inst.RollbackMetadata == nil {
+			inst.RollbackMetadata = map[string]string{}
+		}
+		inst.RollbackMetadata["previous_state"] = inst.State
+		inst.RollbackMetadata["previous_runtime_ref"] = inst.RuntimeRef
+		inst.RollbackMetadata["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+		inst.State = "updated"
+		inst.UpdatedAt = time.Now().UTC()
+		if err := s.repo.UpdateInstallation(r.Context(), inst); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update installation"})
+			return
+		}
+		s.audit(r.Context(), "admin", "update_installation", id, "ok", map[string]any{"mode": "metadata-only"})
+		writeJSON(w, http.StatusOK, inst)
+		return
+	}
+
+	rollback := map[string]string{
+		"previous_runtime_ref":  inst.RuntimeRef,
+		"previous_plan_id":      inst.PlanID,
+		"previous_image_digest": inst.ImageDigest,
+		"previous_state":        inst.State,
+	}
+	for k, v := range inst.RollbackMetadata {
+		if _, exists := rollback[k]; !exists {
+			rollback[k] = v
+		}
+	}
+
+	spec := runtime.InstallSpec{
+		Name:       sanitizeName(inst.ID + "-next"),
+		Image:      image,
+		ReadOnlyFS: true,
+		PIDs:       20,
+		Network:    "bridge",
+		Labels: map[string]string{
+			"openmcp.managed":         "true",
+			"openmcp.installation_id": inst.ID,
+			"openmcp.previous_ref":    inst.RuntimeRef,
+		},
+	}
+	if planErr == nil {
+		spec.EnvNames = plan.EnvVarNames
+		spec.CPU = plan.CPULimit
+		spec.Memory = plan.MemoryLimit
+		if plan.PIDLimit > 0 {
+			spec.PIDs = plan.PIDLimit
+		}
+	}
+
+	newRef, meta, err := s.runtime.Update(r.Context(), inst.RuntimeRef, spec)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "runtime update failed"})
+		return
+	}
+	for k, v := range meta {
+		rollback[k] = v
+	}
+	inst.RuntimeRef = newRef
+	inst.State = "running"
+	inst.RollbackMetadata = rollback
+	inst.UpdatedAt = time.Now().UTC()
+	if strings.Contains(image, "@sha256:") {
+		inst.ImageDigest = strings.Split(image, "@sha256:")[1]
+	}
+	if req.PlanID != "" {
+		inst.PlanID = req.PlanID
+	}
+	if err := s.repo.UpdateInstallation(r.Context(), inst); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist installation update"})
+		return
+	}
+	s.audit(r.Context(), "admin", "update_installation", id, "ok", map[string]any{"new_ref": newRef, "image": image})
+	writeJSON(w, http.StatusOK, inst)
+}
+
+func (s *Server) installationRollback(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	inst, err := s.repo.GetInstallation(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "installation not found"})
+		return
+	}
+	prev := ""
+	if inst.RollbackMetadata != nil {
+		prev = inst.RollbackMetadata["previous_runtime_ref"]
+		if prev == "" {
+			prev = inst.RollbackMetadata["rolled_from"]
+		}
+	}
+	if prev == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no rollback target available"})
+		return
+	}
+
+	// Stop current, start previous.
+	_ = s.runtime.Stop(r.Context(), inst.RuntimeRef)
+	if err := s.runtime.Start(r.Context(), prev); err != nil {
+		// If previous cannot start (fake recreate), try reinstall from previous plan image.
+		plan, planErr := s.repo.GetDeploymentPlan(r.Context(), inst.PlanID)
+		if planErr != nil || plan.Image == "" {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "rollback start failed"})
+			return
+		}
+		ref, ierr := s.runtime.Install(r.Context(), runtime.InstallSpec{
+			Name: sanitizeName(inst.ID + "-rb"), Image: plan.Image, ReadOnlyFS: true, PIDs: 20, Network: "bridge",
+			Labels: map[string]string{"openmcp.managed": "true", "openmcp.installation_id": inst.ID, "openmcp.rollback": "true"},
+		})
+		if ierr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "rollback reinstall failed"})
+			return
+		}
+		prev = ref
+	}
+
+	// Swap refs; keep current as future rollback target.
+	newMeta := map[string]string{
+		"previous_runtime_ref": inst.RuntimeRef,
+		"rolled_back_to":       prev,
+		"rolled_back_at":       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if inst.RollbackMetadata != nil {
+		if d := inst.RollbackMetadata["previous_image_digest"]; d != "" {
+			inst.ImageDigest = d
+		}
+		if p := inst.RollbackMetadata["previous_plan_id"]; p != "" {
+			inst.PlanID = p
+		}
+	}
+	inst.RuntimeRef = prev
+	inst.State = "running"
+	inst.RollbackMetadata = newMeta
+	inst.UpdatedAt = time.Now().UTC()
+	if err := s.repo.UpdateInstallation(r.Context(), inst); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist rollback"})
+		return
+	}
+	s.audit(r.Context(), "admin", "rollback_installation", id, "ok", map[string]any{"runtime_ref": prev})
+	writeJSON(w, http.StatusOK, inst)
+}
+
 func (s *Server) installationControl(w http.ResponseWriter, r *http.Request, action string) {
 	id := r.PathValue("id")
 	inst, err := s.repo.GetInstallation(r.Context(), id)
@@ -559,7 +730,33 @@ func (s *Server) managementMCP(w http.ResponseWriter, r *http.Request) {
 	case "check_health":
 		s.health(w, r)
 	case "request_update":
-		writeJSON(w, http.StatusOK, map[string]string{"status": "update prepared"})
+		id, _ := req.Input["id"].(string)
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		body, _ := json.Marshal(map[string]any{"image": req.Input["image"], "plan_id": req.Input["plan_id"]})
+		r2 := r.Clone(ctx)
+		r2.Body = io.NopCloser(strings.NewReader(string(body)))
+		r2.Method = http.MethodPost
+		// PathValue needs ServeMux; call handler directly after setting path via path value workaround
+		h := http.HandlerFunc(func(ww http.ResponseWriter, rr *http.Request) {
+			// inject path id
+			rr.SetPathValue("id", id)
+			s.installationUpdate(ww, rr)
+		})
+		h.ServeHTTP(w, r2)
+	case "request_rollback":
+		id, _ := req.Input["id"].(string)
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		h := http.HandlerFunc(func(ww http.ResponseWriter, rr *http.Request) {
+			rr.SetPathValue("id", id)
+			s.installationRollback(ww, rr)
+		})
+		h.ServeHTTP(w, r)
 	case "disable_installation":
 		id, _ := req.Input["id"].(string)
 		if err := s.repo.DisableInstallation(ctx, id); err != nil {
