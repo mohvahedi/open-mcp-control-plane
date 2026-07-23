@@ -124,7 +124,7 @@ pre{margin:0;background:#0a1428;border:1px solid var(--line);border-radius:8px;p
 
   <section class="card">
     <h2>Gateway & audit</h2>
-    <div class="banner">Gateway endpoints: <code>GET /gateway/tools</code> and <code>POST /gateway/invoke</code> with client bearer token <code>clientId.token</code>.</div>
+    <div class="banner">Gateway: REST <code>/gateway/tools</code> + <code>/gateway/invoke</code>, Streamable HTTP JSON-RPC <code>POST /gateway/mcp</code> (or <code>/mcp/profiles/{name}</code>). Auth: bearer <code>clientId.token</code>.</div>
     <div class="row">
       <button class="secondary" onclick="loadGateway()">Gateway status</button>
       <button class="secondary" onclick="loadAudit()">Audit events</button>
