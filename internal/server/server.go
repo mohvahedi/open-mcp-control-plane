@@ -84,9 +84,11 @@ func (s *Server) routes() {
 	// management MCP
 	s.mux.HandleFunc("POST /mcp/management", s.withAdminAuth(s.managementMCP))
 
-	// remote MCP gateway
+	// remote MCP gateway (legacy REST helpers)
 	s.mux.HandleFunc("GET /gateway/tools", s.withClientAuth(s.gatewayTools))
 	s.mux.HandleFunc("POST /gateway/invoke", s.withClientAuth(s.gatewayInvoke))
+	// MCP Streamable HTTP transport
+	s.registerStreamableGateway()
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -502,7 +504,20 @@ func (s *Server) gatewayStatus(w http.ResponseWriter, r *http.Request) {
 	inst, _ := s.repo.ListInstallations(r.Context())
 	prof, _ := s.repo.ListProfiles(r.Context())
 	clients, _ := s.repo.ListClients(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"installations": len(inst), "profiles": len(prof), "clients": len(clients), "path": "/gateway"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"installations": len(inst),
+		"profiles":      len(prof),
+		"clients":       len(clients),
+		"path":          "/gateway",
+		"endpoints": map[string]string{
+			"rest_tools":      "GET /gateway/tools",
+			"rest_invoke":     "POST /gateway/invoke",
+			"streamable_http": "POST /gateway/mcp",
+			"profile_mcp":     "POST /mcp/profiles/{name}",
+		},
+		"transport": "streamable-http",
+		"protocol":  "2024-11-05",
+	})
 }
 
 func (s *Server) managementMCP(w http.ResponseWriter, r *http.Request) {
