@@ -161,9 +161,9 @@ func normalizeOnePackage(payload map[string]any, source string) Package {
 		Transport:   get("transport"),
 		License:     get("license"),
 		Provenance: map[string]any{
-			"source":     source,
+			"source":      source,
 			"retrievedAt": time.Now().UTC().Format(time.RFC3339Nano),
-			"upstream":   payload,
+			"upstream":    payload,
 		},
 	}
 	if tags, ok := payload["tags"].([]any); ok {

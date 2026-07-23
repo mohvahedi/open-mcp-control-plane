@@ -98,16 +98,16 @@ type Client struct {
 }
 
 type AuditEvent struct {
-	ID          string         `json:"id"`
-	Actor       string         `json:"actor"`
-	Action      string         `json:"action"`
-	Target      string         `json:"target"`
-	Result      string         `json:"result"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	OccurredAt  time.Time      `json:"occurred_at"`
-	Redacted    bool           `json:"redacted"`
-	RequestID   string         `json:"request_id,omitempty"`
-	RemoteAddr  string         `json:"remote_addr,omitempty"`
-	ProfileID   string         `json:"profile_id,omitempty"`
-	ClientID    string         `json:"client_id,omitempty"`
+	ID         string         `json:"id"`
+	Actor      string         `json:"actor"`
+	Action     string         `json:"action"`
+	Target     string         `json:"target"`
+	Result     string         `json:"result"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	OccurredAt time.Time      `json:"occurred_at"`
+	Redacted   bool           `json:"redacted"`
+	RequestID  string         `json:"request_id,omitempty"`
+	RemoteAddr string         `json:"remote_addr,omitempty"`
+	ProfileID  string         `json:"profile_id,omitempty"`
+	ClientID   string         `json:"client_id,omitempty"`
 }

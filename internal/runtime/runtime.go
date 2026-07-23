@@ -120,13 +120,21 @@ func (d *DockerCLI) Install(ctx context.Context, spec InstallSpec) (string, erro
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (d *DockerCLI) Start(ctx context.Context, ref string) error { _, err := d.run(ctx, "start", ref); return err }
-func (d *DockerCLI) Stop(ctx context.Context, ref string) error  { _, err := d.run(ctx, "stop", ref); return err }
+func (d *DockerCLI) Start(ctx context.Context, ref string) error {
+	_, err := d.run(ctx, "start", ref)
+	return err
+}
+func (d *DockerCLI) Stop(ctx context.Context, ref string) error {
+	_, err := d.run(ctx, "stop", ref)
+	return err
+}
 func (d *DockerCLI) Restart(ctx context.Context, ref string) error {
 	_, err := d.run(ctx, "restart", ref)
 	return err
 }
-func (d *DockerCLI) Health(ctx context.Context, ref string) (Status, error) { return d.Inspect(ctx, ref) }
+func (d *DockerCLI) Health(ctx context.Context, ref string) (Status, error) {
+	return d.Inspect(ctx, ref)
+}
 func (d *DockerCLI) Logs(ctx context.Context, ref string, lines int) (string, error) {
 	if lines <= 0 {
 		lines = 200
@@ -137,7 +145,10 @@ func (d *DockerCLI) Logs(ctx context.Context, ref string, lines int) (string, er
 func (d *DockerCLI) PrepareUpdate(_ context.Context, _ string) (map[string]string, error) {
 	return map[string]string{"strategy": "recreate", "rollback": "image_digest"}, nil
 }
-func (d *DockerCLI) Uninstall(ctx context.Context, ref string) error { _, err := d.run(ctx, "rm", "-f", ref); return err }
+func (d *DockerCLI) Uninstall(ctx context.Context, ref string) error {
+	_, err := d.run(ctx, "rm", "-f", ref)
+	return err
+}
 
 type FakeRuntime struct {
 	mu     sync.Mutex
@@ -149,7 +160,9 @@ func NewFakeRuntime() *FakeRuntime {
 	return &FakeRuntime{states: make(map[string]Status), logs: make(map[string]string)}
 }
 
-func (f *FakeRuntime) Inspect(_ context.Context, ref string) (Status, error) { return f.Health(context.Background(), ref) }
+func (f *FakeRuntime) Inspect(_ context.Context, ref string) (Status, error) {
+	return f.Health(context.Background(), ref)
+}
 
 func (f *FakeRuntime) Install(_ context.Context, spec InstallSpec) (string, error) {
 	f.mu.Lock()
