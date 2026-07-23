@@ -17,6 +17,7 @@ import (
 	"github.com/mohvahedi/open-mcp-control-plane/internal/domain"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/policy"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/runtime"
+	"github.com/mohvahedi/open-mcp-control-plane/internal/scanner"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/security"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/store"
 )
@@ -26,6 +27,7 @@ type Server struct {
 	catalog    *catalog.Service
 	repo       store.Repository
 	runtime    runtime.Runtime
+	scanner    scanner.Scanner
 	mux        *http.ServeMux
 	httpClient *http.Client
 }
@@ -36,6 +38,7 @@ func New(cfg config.Config, catalogService *catalog.Service, repo store.Reposito
 		catalog:    catalogService,
 		repo:       repo,
 		runtime:    rt,
+		scanner:    scanner.NewHeuristic(),
 		mux:        http.NewServeMux(),
 		httpClient: &http.Client{Timeout: cfg.RequestTimeout},
 	}
@@ -53,6 +56,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/catalog/search", s.searchCatalog)
 	s.mux.HandleFunc("GET /v1/catalog/packages/{id}", s.inspectPackage)
 	s.mux.HandleFunc("GET /v1/catalog/sources/status", s.catalogSourceStatus)
+	s.mux.HandleFunc("GET /v1/catalog/packages/{id}/risk", s.packageRisk)
+	s.mux.HandleFunc("POST /v1/catalog/scan-image", s.scanImage)
+	s.mux.HandleFunc("POST /v1/admin/scan/image", s.withAdminAuth(s.scanImage))
 
 	// admin management API
 	s.mux.HandleFunc("GET /v1/admin/plans", s.withAdminAuth(s.listPlans))
@@ -139,6 +145,59 @@ func (s *Server) catalogSourceStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sources": s.catalog.SourceStatus(r.Context())})
 }
 
+func (s *Server) scanImage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Image string `json:"image"`
+	}
+	if r.Method == http.MethodGet {
+		req.Image = r.URL.Query().Get("image")
+	} else if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Image == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "image is required"})
+		return
+	}
+	report, err := s.scanner.ScanImage(r.Context(), req.Image)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) packageRisk(w http.ResponseWriter, r *http.Request) {
+	pkg, err := s.catalog.GetPackage(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, catalog.ErrPackageNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "package not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "catalog package lookup failed"})
+		return
+	}
+	tools := make([]scanner.ToolInput, 0, len(pkg.Tools))
+	for _, t := range pkg.Tools {
+		tools = append(tools, scanner.ToolInput{Name: t.Name, Description: t.Description, Operations: t.Operations})
+	}
+	image := ""
+	if pkg.Provenance != nil {
+		if v, ok := pkg.Provenance["image"].(string); ok {
+			image = v
+		}
+	}
+	report, err := s.scanner.ScorePackage(r.Context(), scanner.PackageInput{
+		ID: pkg.ID, Name: pkg.Name, Description: pkg.Description, Version: pkg.Version,
+		Source: pkg.Source, Runtime: pkg.Runtime, License: pkg.License, Tags: pkg.Tags,
+		Tools: tools, Image: image, Provenance: pkg.Provenance,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "risk scoring failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"package": pkg, "risk": report})
+}
+
 func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 	var plan domain.DeploymentPlan
 	if !decodeJSON(w, r, &plan) {
@@ -162,7 +221,13 @@ func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store plan"})
 		return
 	}
-	s.audit(r.Context(), "admin", "create_plan", stored.ID, "ok", map[string]any{"requires_approval": stored.RequiresApproval})
+	s.audit(r.Context(), "admin", "create_plan", stored.ID, "ok", map[string]any{
+		"requires_approval": stored.RequiresApproval,
+		"risk_score":        decision.RiskScore,
+		"risk_grade":        decision.RiskGrade,
+	})
+	// Keep plan JSON shape stable for clients/tests; risk details are on
+	// RiskFindings plus dedicated scan/risk endpoints.
 	writeJSON(w, http.StatusCreated, stored)
 }
 
@@ -729,6 +794,27 @@ func (s *Server) managementMCP(w http.ResponseWriter, r *http.Request) {
 		s.listInstallations(w, r)
 	case "check_health":
 		s.health(w, r)
+	case "scan_image":
+		img, _ := req.Input["image"].(string)
+		if img == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "image is required"})
+			return
+		}
+		report, err := s.scanner.ScanImage(ctx, img)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
+	case "score_package":
+		id, _ := req.Input["id"].(string)
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		r2 := r.Clone(ctx)
+		r2.SetPathValue("id", id)
+		s.packageRisk(w, r2)
 	case "request_update":
 		id, _ := req.Input["id"].(string)
 		if id == "" {
