@@ -25,6 +25,7 @@ type Runtime interface {
 	Health(context.Context, string) (Status, error)
 	Logs(context.Context, string, int) (string, error)
 	PrepareUpdate(context.Context, string) (map[string]string, error)
+	Update(context.Context, string, InstallSpec) (string, map[string]string, error)
 	Uninstall(context.Context, string) error
 }
 
@@ -145,6 +146,29 @@ func (d *DockerCLI) Logs(ctx context.Context, ref string, lines int) (string, er
 func (d *DockerCLI) PrepareUpdate(_ context.Context, _ string) (map[string]string, error) {
 	return map[string]string{"strategy": "recreate", "rollback": "image_digest"}, nil
 }
+func (d *DockerCLI) Update(ctx context.Context, ref string, spec InstallSpec) (string, map[string]string, error) {
+	meta, err := d.PrepareUpdate(ctx, ref)
+	if err != nil {
+		return "", nil, err
+	}
+	_ = d.Stop(ctx, ref)
+	if spec.Name == "" {
+		spec.Name = ref + "-next"
+	}
+	if spec.Labels == nil {
+		spec.Labels = map[string]string{}
+	}
+	spec.Labels["openmcp.previous_ref"] = ref
+	newRef, err := d.Install(ctx, spec)
+	if err != nil {
+		_ = d.Start(ctx, ref)
+		return "", meta, err
+	}
+	meta["new_ref"] = newRef
+	meta["rolled_from"] = ref
+	return newRef, meta, nil
+}
+
 func (d *DockerCLI) Uninstall(ctx context.Context, ref string) error {
 	_, err := d.run(ctx, "rm", "-f", ref)
 	return err
@@ -216,8 +240,32 @@ func (f *FakeRuntime) Logs(_ context.Context, ref string, _ int) (string, error)
 	defer f.mu.Unlock()
 	return f.logs[ref], nil
 }
-func (f *FakeRuntime) PrepareUpdate(_ context.Context, _ string) (map[string]string, error) {
-	return map[string]string{"strategy": "fake-recreate", "rollback": "stored"}, nil
+func (f *FakeRuntime) PrepareUpdate(_ context.Context, ref string) (map[string]string, error) {
+	return map[string]string{"strategy": "fake-recreate", "previous_ref": ref, "rollback": "stored"}, nil
+}
+func (f *FakeRuntime) Update(_ context.Context, ref string, spec InstallSpec) (string, map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prev, ok := f.states[ref]
+	if !ok {
+		return "", nil, ErrRuntimeNotFound
+	}
+	newID := "fake-" + spec.Name
+	if newID == "fake-" || newID == "fake-"+ref {
+		newID = ref + "-vnext"
+	}
+	// keep previous for rollback
+	prev.State = "stopped"
+	f.states[ref] = prev
+	f.states[newID] = Status{State: "running", Health: "healthy", Runtime: "fake"}
+	f.logs[newID] = "updated from " + ref + " image=" + spec.Image
+	meta := map[string]string{
+		"strategy":       "fake-recreate",
+		"previous_ref":   ref,
+		"new_ref":        newID,
+		"previous_image": spec.Image,
+	}
+	return newID, meta, nil
 }
 func (f *FakeRuntime) Uninstall(_ context.Context, ref string) error {
 	f.mu.Lock()

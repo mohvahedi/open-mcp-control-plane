@@ -22,6 +22,7 @@ An open-source, self-hosted control plane for discovering, evaluating, deploying
 - Management MCP endpoint (`POST /mcp/management`)
 - AES-GCM encrypted secret references (`OPENMCP_SECRETS_MASTER_KEY`)
 - Streamable HTTP JSON-RPC gateway (`initialize`, `tools/list`, `tools/call`)
+- Installation update/rollback with runtime ref snapshots
 
 ## Quick start
 
@@ -55,7 +56,7 @@ API/GUI: `http://127.0.0.1:8080`
 
 - `GET /healthz`, `GET /readyz`, `GET /v1/info`
 - `GET /v1/catalog/search`, `GET /v1/catalog/packages/{id}`, `GET /v1/catalog/sources/status`
-- Admin: `/v1/admin/plans`, `/approvals`, `/installations`, `/profiles`, `/clients`, `/secrets`, `/audit`, `/gateway/status`
+- Admin: `/v1/admin/plans`, `/approvals`, `/installations` (+ update/rollback), `/profiles`, `/clients`, `/secrets`, `/audit`, `/gateway/status`
 - Gateway (REST helpers): `GET /gateway/tools`, `POST /gateway/invoke`
 - Gateway (Streamable HTTP / JSON-RPC): `POST /gateway/mcp`, `GET /gateway/mcp`
 - Profile MCP aliases: `POST /mcp/profiles/{name}`, `GET /mcp/profiles/{name}`
@@ -79,7 +80,7 @@ See [docs/security.md](docs/security.md) and [SECURITY.md](SECURITY.md).
 1. ~~Full Streamable HTTP MCP transport parity~~ (v0.1 partial: initialize/tools/list/tools/call)
 2. OIDC identity and production secret backends
 3. Production GUI polish and package risk scoring
-4. Update/rollback workflows and image scanning
+4. ~~Update/rollback workflows~~ (image scanning still pending)
 5. Skills package model and ToolHive catalog federation
 6. SSE streaming responses and full session lifecycle for long-running tools
 

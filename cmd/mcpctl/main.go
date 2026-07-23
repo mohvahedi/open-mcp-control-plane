@@ -64,6 +64,26 @@ func run(args []string) error {
 		return client.handleProfile(args[1:])
 	case "client":
 		return client.handleClient(args[1:])
+	case "list":
+		return client.getPrintAuth("/v1/admin/installations")
+	case "update":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl update <installation-id> [image]")
+		}
+		payload := map[string]string{}
+		if len(args) > 2 {
+			payload["image"] = args[2]
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		return client.postPrintAuth("/v1/admin/installations/"+args[1]+"/update", body)
+	case "rollback":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl rollback <installation-id>")
+		}
+		return client.postPrintAuth("/v1/admin/installations/"+args[1]+"/rollback", []byte("{}"))
 	case "gateway":
 		if len(args) < 2 || args[1] != "status" {
 			return fmt.Errorf("usage: mcpctl gateway status")
@@ -277,6 +297,9 @@ Commands:
   plan create '<json>' | show <id> | list
   approval create <plan-id> <reason>
   install apply <plan-id> | list | health|logs|start|stop|restart|disable|uninstall <id>
+  list
+  update <installation-id> [image]
+  rollback <installation-id>
   profile create <name> | list | add <profile-id> <installation-ids> | tools <profile-id> <tools>
   client create <profile-id> <name> | list | revoke <client-id>
   gateway status
