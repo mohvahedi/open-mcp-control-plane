@@ -43,3 +43,7 @@ The initial service intentionally has no external runtime dependencies. Durable 
 ## Decision: monorepo
 
 The API, CLI, web application, deployment manifests, and specifications will remain in one repository until independent release cadences are justified.
+
+## Gateway integration (v0.1.1)
+
+The gateway aggregates tools from profile-linked installations that expose HTTP `/tools` and `/invoke` adapters. Tools are namespaced as `<installation-id>.<tool-name>` and filtered by profile allowlists. Integration tests cover two mock downstream servers and approval-gated installs.
