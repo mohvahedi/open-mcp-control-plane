@@ -17,7 +17,7 @@ import (
 	"github.com/mohvahedi/open-mcp-control-plane/internal/store"
 )
 
-func TestMCPSessionLifecycleAndSSE(t *testing.T) {
+func TestMCPSessionLifecycle(t *testing.T) {
 	down := startMockDownstream(t,
 		[]map[string]any{{"name": "echo", "description": "echo tool"}},
 		map[string]any{"echo": map[string]any{"ok": true}},
@@ -73,46 +73,21 @@ func TestMCPSessionLifecycleAndSSE(t *testing.T) {
 	if sessionID == "" {
 		t.Fatal("expected Mcp-Session-Id")
 	}
+	if !strings.Contains(rec.Body.String(), "protocolVersion") {
+		t.Fatalf("unexpected initialize body: %s", rec.Body.String())
+	}
 
-	// SSE stream attaches to session and emits endpoint event
-	sseReq := httptest.NewRequest(http.MethodGet, "/gateway/mcp", nil)
-	sseReq.Header.Set("Authorization", auth)
-	sseReq.Header.Set("Accept", "text/event-stream")
-	sseReq.Header.Set("Mcp-Session-Id", sessionID)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sseReq = sseReq.WithContext(ctx)
-
-	pr, pw := httptest.NewRecorder(), httptest.NewRecorder()
-	_ = pr
-	done := make(chan string, 1)
-	go func() {
-		handler.ServeHTTP(pw, sseReq)
-	}()
-	// Give the handler a moment to write the endpoint event.
-	time.Sleep(50 * time.Millisecond)
-	body := pw.Body.String()
-	if !strings.Contains(body, "event: endpoint") && !strings.Contains(body, "text/event-stream") {
-		// Flusher path: check Content-Type at least
-		if ct := pw.Header().Get("Content-Type"); !strings.Contains(ct, "text/event-stream") && body == "" {
-			// ResponseRecorder may not flush progressively; still require session header on init.
-			done <- "skip-body"
-		} else {
-			done <- body
-		}
-	} else {
-		done <- body
+	// GET with session id succeeds (non-SSE probe)
+	get := httptest.NewRequest(http.MethodGet, "/gateway/mcp", nil)
+	get.Header.Set("Authorization", auth)
+	get.Header.Set("Mcp-Session-Id", sessionID)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", getRec.Code, getRec.Body.String())
 	}
-	cancel()
-	select {
-	case <-done:
-	default:
-	}
-	if ct := pw.Header().Get("Content-Type"); ct != "" && !strings.Contains(ct, "text/event-stream") {
-		t.Fatalf("unexpected content-type %q body=%q", ct, pw.Body.String())
-	}
-	if sid := pw.Header().Get("Mcp-Session-Id"); sid != "" && sid != sessionID {
-		t.Fatalf("session mismatch %s vs %s", sid, sessionID)
+	if !strings.Contains(getRec.Body.String(), "streamable-http") {
+		t.Fatalf("unexpected get body: %s", getRec.Body.String())
 	}
 
 	// DELETE ends session
@@ -126,14 +101,85 @@ func TestMCPSessionLifecycleAndSSE(t *testing.T) {
 	}
 
 	// Unknown session after delete
-	get := httptest.NewRequest(http.MethodGet, "/gateway/mcp", nil)
-	get.Header.Set("Authorization", auth)
-	get.Header.Set("Mcp-Session-Id", sessionID)
-	getRec := httptest.NewRecorder()
-	handler.ServeHTTP(getRec, get)
-	if getRec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 after delete, got %d %s", getRec.Code, getRec.Body.String())
+	get2 := httptest.NewRequest(http.MethodGet, "/gateway/mcp", nil)
+	get2.Header.Set("Authorization", auth)
+	get2.Header.Set("Mcp-Session-Id", sessionID)
+	getRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(getRec2, get2)
+	if getRec2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d %s", getRec2.Code, getRec2.Body.String())
 	}
+}
+
+func TestSSESSEEndpointViaRealServer(t *testing.T) {
+	// Use a real HTTP server so SSE streaming is race-detector safe.
+	down := startMockDownstream(t,
+		[]map[string]any{{"name": "echo", "description": "echo tool"}},
+		map[string]any{"echo": map[string]any{"ok": true}},
+	)
+	repo, err := store.OpenSQLite(filepath.Join(t.TempDir(), "sse.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	now := time.Now().UTC()
+	if _, err := repo.CreateInstallation(context.Background(), domain.Installation{
+		ID: "inst-sse", PlanID: "p", RuntimeRef: down.URL, State: "running",
+		RollbackMetadata: map[string]string{}, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateProfile(context.Background(), domain.Profile{
+		ID: "profile-sse", Name: "sse", InstallationIDs: []string{"inst-sse"},
+		ToolAllowlist: []string{"inst-sse.echo"}, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw := "sse-token"
+	hash, _ := security.HashToken(raw)
+	if _, err := repo.CreateClient(context.Background(), domain.Client{
+		ID: "client-sse", ProfileID: "profile-sse", Name: "c", CreatedAt: now,
+	}, hash); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(config.Config{
+		Version: "test", RequestTimeout: 2 * time.Second, GatewayBindPath: "/gateway",
+		SecretsMasterKey: "unit-test-master-key", MCPSessionTTL: time.Minute,
+	}, catalog.NewService(), repo, runtime.NewFakeRuntime())
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/gateway/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer client-sse."+raw)
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sse status=%d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("content-type=%q", ct)
+	}
+	if resp.Header.Get("Mcp-Session-Id") == "" {
+		t.Fatal("expected session id on SSE response")
+	}
+	// Read first chunk for endpoint event, then cancel.
+	buf := make([]byte, 256)
+	n, _ := resp.Body.Read(buf)
+	body := string(buf[:n])
+	if !strings.Contains(body, "endpoint") && !strings.Contains(body, "gateway/mcp") && n == 0 {
+		// Some environments may delay first write; session header is enough signal.
+		t.Logf("sse first read empty/partial: %q", body)
+	}
+	cancel()
 }
 
 func TestAdminSessionTokenAuth(t *testing.T) {
@@ -156,7 +202,6 @@ func TestAdminSessionTokenAuth(t *testing.T) {
 	}
 	handler := New(cfg, catalog.NewService(), repo, runtime.NewFakeRuntime())
 
-	// bootstrap token still works
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/gateway/status", nil)
 	req.Header.Set("Authorization", "Bearer bootstrap-admin")
 	rec := httptest.NewRecorder()
@@ -168,7 +213,6 @@ func TestAdminSessionTokenAuth(t *testing.T) {
 		t.Fatalf("unexpected body %s", rec.Body.String())
 	}
 
-	// OIDC session token works
 	sess, err := security.MintSessionToken("sess-hmac", security.OIDCIdentity{
 		Subject: "sub", Email: "admin@example.com", Name: "Admin",
 	}, time.Hour)
@@ -183,7 +227,6 @@ func TestAdminSessionTokenAuth(t *testing.T) {
 		t.Fatalf("session auth failed: %d %s", rec2.Code, rec2.Body.String())
 	}
 
-	// secrets backend info
 	req3 := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets/backend", nil)
 	req3.Header.Set("Authorization", "Bearer bootstrap-admin")
 	rec3 := httptest.NewRecorder()
