@@ -12,6 +12,7 @@ import (
 
 	"github.com/mohvahedi/open-mcp-control-plane/internal/catalog"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/config"
+	"github.com/mohvahedi/open-mcp-control-plane/internal/domain"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/runtime"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/security"
 	"github.com/mohvahedi/open-mcp-control-plane/internal/server"
@@ -48,7 +49,32 @@ func main() {
 			Timeout:   cfg.RegistryTimeout,
 			PageLimit: cfg.RegistryPageLimit,
 		}),
+		catalog.NewToolHiveSource("toolhive", catalog.ToolHiveConfig{
+			Timeout: cfg.RegistryTimeout,
+		}, catalog.Package{
+			ID:          "toolhive-filesystem",
+			Name:        "Filesystem MCP (ToolHive seed)",
+			Description: "Seed package representing a ToolHive-federated MCP server",
+			Source:      "toolhive",
+			Tags:        []string{"toolhive", "filesystem"},
+			Transport:   "stdio",
+		}),
 	)
+
+	if skills, err := repo.ListSkills(context.Background()); err == nil && len(skills) == 0 {
+		_, _ = repo.CreateSkill(context.Background(), domain.Skill{
+			ID:          "skill-safe-ops",
+			Name:        "Safe Operations Checklist",
+			Description: "Bootstrap skill: prefer read-only tools and require approval for destructive actions",
+			Version:     "0.1.0",
+			Source:      "bootstrap",
+			Kind:        "prompt",
+			License:     "Apache-2.0",
+			Tags:        []string{"safety", "bootstrap"},
+			Content:     "# Safe Operations\n\n1. Prefer read-only tools.\n2. Require approval for write/delete/exec.\n3. Never exfiltrate secrets.\n",
+			Provenance:  map[string]any{"repository": "https://github.com/mohvahedi/open-mcp-control-plane"},
+		})
+	}
 
 	var rt runtime.Runtime
 	if cfg.UseFakeRuntime {

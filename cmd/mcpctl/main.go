@@ -95,6 +95,8 @@ func run(args []string) error {
 			return fmt.Errorf("usage: mcpctl rollback <installation-id>")
 		}
 		return client.postPrintAuth("/v1/admin/installations/"+args[1]+"/rollback", []byte("{}"))
+	case "skill":
+		return client.handleSkill(args[1:])
 	case "gateway":
 		if len(args) < 2 || args[1] != "status" {
 			return fmt.Errorf("usage: mcpctl gateway status")
@@ -228,6 +230,50 @@ func (c *apiClient) handleClient(args []string) error {
 	}
 }
 
+func (c *apiClient) handleSkill(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: mcpctl skill <list|create|show|delete|bind|bindings|unbind>")
+	}
+	switch args[0] {
+	case "list":
+		return c.getPrintAuth("/v1/admin/skills")
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl skill show <id>")
+		}
+		return c.getPrintAuth("/v1/admin/skills/" + args[1])
+	case "create":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl skill create '<json>'")
+		}
+		return c.postPrintAuth("/v1/admin/skills", []byte(args[1]))
+	case "delete":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl skill delete <id>")
+		}
+		return c.doPrint(http.MethodDelete, "/v1/admin/skills/"+args[1], nil, true)
+	case "bind":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: mcpctl skill bind <profile-id> <skill-id>")
+		}
+		body, _ := json.Marshal(map[string]any{"profile_id": args[1], "skill_id": args[2], "enabled": true})
+		return c.postPrintAuth("/v1/admin/skill-bindings", body)
+	case "bindings":
+		path := "/v1/admin/skill-bindings"
+		if len(args) > 1 {
+			path += "?profile_id=" + urlQuery(args[1])
+		}
+		return c.getPrintAuth(path)
+	case "unbind":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: mcpctl skill unbind <binding-id>")
+		}
+		return c.doPrint(http.MethodDelete, "/v1/admin/skill-bindings/"+args[1], nil, true)
+	default:
+		return fmt.Errorf("unknown skill subcommand")
+	}
+}
+
 func (c *apiClient) getPrint(path string) error {
 	return c.doPrint(http.MethodGet, path, nil, false)
 }
@@ -315,6 +361,7 @@ Commands:
   rollback <installation-id>
   profile create <name> | list | add <profile-id> <installation-ids> | tools <profile-id> <tools>
   client create <profile-id> <name> | list | revoke <client-id>
+  skill list|create|show|delete|bind|bindings|unbind
   gateway status
 
 Flags:
