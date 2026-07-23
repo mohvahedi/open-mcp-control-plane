@@ -83,16 +83,25 @@ func main() {
 		rt = runtime.NewDockerCLI(cfg.DockerBinary, cfg.RequestTimeout)
 	}
 
-	handler := server.New(cfg, catalogService, repo, rt)
+	secretsBackend, err := security.NewSecretBackend(cfg.SecretsBackend, cfg.SecretsMasterKey, cfg.SecretsFileDir)
+	if err != nil {
+		log.Fatalf("secrets backend: %v", err)
+	}
+	oidcAuth, err := security.NewOIDCAuthenticator(context.Background(), cfg.OIDC())
+	if err != nil {
+		log.Fatalf("oidc setup: %v", err)
+	}
+	handler := server.NewWithOptions(cfg, catalogService, repo, rt, secretsBackend, oidcAuth)
 	httpServer := &http.Server{
-		Addr:         cfg.Address(),
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 20 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:        cfg.Address(),
+		Handler:     handler,
+		ReadTimeout: 15 * time.Second,
+		// WriteTimeout 0 allows long-lived SSE streams; request deadlines still apply elsewhere.
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("{\"msg\":\"open-mcp-control-plane listening\",\"version\":%q,\"addr\":%q}", cfg.Version, cfg.Address())
+	log.Printf("{\"msg\":\"open-mcp-control-plane listening\",\"version\":%q,\"addr\":%q,\"secrets_backend\":%q,\"oidc\":%v}", cfg.Version, cfg.Address(), secretsBackend.Name(), oidcAuth.Enabled())
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)

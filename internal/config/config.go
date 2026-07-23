@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/mohvahedi/open-mcp-control-plane/internal/security"
 )
 
 type Config struct {
@@ -22,10 +25,29 @@ type Config struct {
 	DockerBinary        string
 	GatewayBindPath     string
 	SecretsMasterKey    string
+	SecretsBackend      string // local | env | file
+	SecretsFileDir      string
+
+	// OIDC admin identity (optional).
+	OIDCEnabled         bool
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCClientSecret    string
+	OIDCRedirectURL     string
+	OIDCScopes          []string
+	OIDCAllowedEmails   []string
+	OIDCAllowedSubjects []string
+	OIDCSessionTTL      time.Duration
+	// SessionHMACSecret signs post-login admin session cookies/tokens.
+	// Defaults to SecretsMasterKey when empty.
+	SessionHMACSecret string
+
+	// MCP session TTL for Streamable HTTP / SSE sessions.
+	MCPSessionTTL time.Duration
 }
 
 func Load() Config {
-	return Config{
+	c := Config{
 		Host:                envOr("OPENMCP_HOST", "0.0.0.0"),
 		Port:                envOr("OPENMCP_PORT", "8080"),
 		Version:             envOr("OPENMCP_VERSION", "dev"),
@@ -39,10 +61,42 @@ func Load() Config {
 		DockerBinary:        envOr("OPENMCP_DOCKER_BINARY", "docker"),
 		GatewayBindPath:     envOr("OPENMCP_GATEWAY_PATH", "/gateway"),
 		SecretsMasterKey:    envOr("OPENMCP_SECRETS_MASTER_KEY", "dev-only-change-me"),
+		SecretsBackend:      envOr("OPENMCP_SECRETS_BACKEND", "local"),
+		SecretsFileDir:      envOr("OPENMCP_SECRETS_FILE_DIR", "./secrets-data"),
+
+		OIDCEnabled:         envBoolOr("OPENMCP_OIDC_ENABLED", false),
+		OIDCIssuerURL:       os.Getenv("OPENMCP_OIDC_ISSUER_URL"),
+		OIDCClientID:        os.Getenv("OPENMCP_OIDC_CLIENT_ID"),
+		OIDCClientSecret:    os.Getenv("OPENMCP_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:     envOr("OPENMCP_OIDC_REDIRECT_URL", "http://127.0.0.1:8080/v1/auth/oidc/callback"),
+		OIDCScopes:          security.ParseAllowedCSV(envOr("OPENMCP_OIDC_SCOPES", "openid,profile,email")),
+		OIDCAllowedEmails:   security.ParseAllowedCSV(os.Getenv("OPENMCP_OIDC_ALLOWED_EMAILS")),
+		OIDCAllowedSubjects: security.ParseAllowedCSV(os.Getenv("OPENMCP_OIDC_ALLOWED_SUBJECTS")),
+		OIDCSessionTTL:      envDurationOr("OPENMCP_OIDC_SESSION_TTL", 8*time.Hour),
+		SessionHMACSecret:   os.Getenv("OPENMCP_SESSION_HMAC_SECRET"),
+
+		MCPSessionTTL: envDurationOr("OPENMCP_MCP_SESSION_TTL", 30*time.Minute),
 	}
+	if c.SessionHMACSecret == "" {
+		c.SessionHMACSecret = c.SecretsMasterKey
+	}
+	return c
 }
 
 func (c Config) Address() string { return c.Host + ":" + c.Port }
+
+func (c Config) OIDC() security.OIDCConfig {
+	return security.OIDCConfig{
+		Enabled:         c.OIDCEnabled,
+		IssuerURL:       c.OIDCIssuerURL,
+		ClientID:        c.OIDCClientID,
+		ClientSecret:    c.OIDCClientSecret,
+		RedirectURL:     c.OIDCRedirectURL,
+		Scopes:          c.OIDCScopes,
+		AllowedEmails:   c.OIDCAllowedEmails,
+		AllowedSubjects: c.OIDCAllowedSubjects,
+	}
+}
 
 func (c Config) Validate() error {
 	if c.Host == "" || c.Port == "" {
@@ -62,6 +116,16 @@ func (c Config) Validate() error {
 	}
 	if c.SecretsMasterKey == "" {
 		return errors.New("secrets master key is required")
+	}
+	switch strings.ToLower(c.SecretsBackend) {
+	case "local", "aes", "aes-gcm", "env", "file", "":
+	default:
+		return fmt.Errorf("invalid secrets backend %q", c.SecretsBackend)
+	}
+	if c.OIDCEnabled {
+		if c.OIDCIssuerURL == "" || c.OIDCClientID == "" || c.OIDCRedirectURL == "" {
+			return errors.New("oidc issuer, client id, and redirect url required when OIDC enabled")
+		}
 	}
 	return nil
 }
