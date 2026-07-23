@@ -192,4 +192,3 @@ func TestAdminSessionTokenAuth(t *testing.T) {
 		t.Fatalf("secrets backend: %d %s", rec3.Code, rec3.Body.String())
 	}
 }
-

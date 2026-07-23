@@ -93,9 +93,9 @@ func main() {
 	}
 	handler := server.NewWithOptions(cfg, catalogService, repo, rt, secretsBackend, oidcAuth)
 	httpServer := &http.Server{
-		Addr:         cfg.Address(),
-		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
+		Addr:        cfg.Address(),
+		Handler:     handler,
+		ReadTimeout: 15 * time.Second,
 		// WriteTimeout 0 allows long-lived SSE streams; request deadlines still apply elsewhere.
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,

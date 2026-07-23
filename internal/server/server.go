@@ -973,7 +973,7 @@ func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) secretsBackendInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"backend": s.secrets.Name(),
+		"backend":    s.secrets.Name(),
 		"configured": s.config.SecretsBackend,
 	})
 }
@@ -1036,9 +1036,9 @@ func (s *Server) authenticateAdmin(r *http.Request) (string, bool) {
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	actor, ok := s.authenticateAdmin(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"authenticated": ok,
-		"actor":         actor,
-		"oidc_enabled":  s.oidc != nil && s.oidc.Enabled(),
+		"authenticated":   ok,
+		"actor":           actor,
+		"oidc_enabled":    s.oidc != nil && s.oidc.Enabled(),
 		"secrets_backend": s.secrets.Name(),
 	})
 }
