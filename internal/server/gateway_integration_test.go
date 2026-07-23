@@ -98,12 +98,12 @@ func TestGatewayAggregatesTwoDownstreamServers(t *testing.T) {
 	}
 
 	handler := New(config.Config{
-		Version:         "test",
-		RequestTimeout:  2 * time.Second,
-		GatewayBindPath: "/gateway",
+		Version:          "test",
+		RequestTimeout:   2 * time.Second,
+		GatewayBindPath:  "/gateway",
+		SecretsMasterKey: "unit-test-master-key",
 	}, catalog.NewService(), repo, runtime.NewFakeRuntime())
 
-	// list tools through gateway
 	req := httptest.NewRequest(http.MethodGet, "/gateway/tools", nil)
 	req.Header.Set("Authorization", "Bearer client-1."+rawClientToken)
 	rec := httptest.NewRecorder()
@@ -116,7 +116,6 @@ func TestGatewayAggregatesTwoDownstreamServers(t *testing.T) {
 		t.Fatalf("expected namespaced tools, got %s", body)
 	}
 
-	// invoke allowed tool
 	invokeBody := `{"tool":"inst-a.query","args":{"q":"select 1"}}`
 	req = httptest.NewRequest(http.MethodPost, "/gateway/invoke", strings.NewReader(invokeBody))
 	req.Header.Set("Authorization", "Bearer client-1."+rawClientToken)
@@ -127,7 +126,6 @@ func TestGatewayAggregatesTwoDownstreamServers(t *testing.T) {
 		t.Fatalf("invoke failed: %d %s", rec.Code, rec.Body.String())
 	}
 
-	// deny unlisted tool
 	req = httptest.NewRequest(http.MethodPost, "/gateway/invoke", strings.NewReader(`{"tool":"inst-b.secret","args":{}}`))
 	req.Header.Set("Authorization", "Bearer client-1."+rawClientToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -149,7 +147,11 @@ func TestHighRiskPlanRequiresApprovalBeforeApply(t *testing.T) {
 	hash, _ := security.HashToken(adminToken)
 	_ = repo.SetAdminHash(context.Background(), hash)
 
-	handler := New(config.Config{Version: "test", RequestTimeout: 2 * time.Second}, catalog.NewService(), repo, runtime.NewFakeRuntime())
+	handler := New(config.Config{
+		Version:          "test",
+		RequestTimeout:   2 * time.Second,
+		SecretsMasterKey: "unit-test-master-key",
+	}, catalog.NewService(), repo, runtime.NewFakeRuntime())
 
 	planBody := `{"name":"risky","image":"example/img:latest","privileged":true,"host_network":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/plans", strings.NewReader(planBody))
