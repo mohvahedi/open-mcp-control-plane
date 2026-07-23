@@ -16,7 +16,7 @@ type Repository interface {
 	GetDeploymentPlan(context.Context, string) (domain.DeploymentPlan, error)
 	ListDeploymentPlans(context.Context) ([]domain.DeploymentPlan, error)
 
-	CreateApproval(context.Context, domain.Approval) (domain.Approval, bool, error)
+	CreateApproval(context.Context, domain.Approval) (domain.Approval, error)
 	GetApprovalByPlanID(context.Context, string) (domain.Approval, bool, error)
 	ListApprovals(context.Context) ([]domain.Approval, error)
 
