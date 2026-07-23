@@ -5,8 +5,13 @@ services:
       OPENMCP_HOST: 0.0.0.0
       OPENMCP_PORT: 8080
       OPENMCP_VERSION: compose-dev
+      OPENMCP_DB_PATH: file:/data/openmcp.db?_pragma=busy_timeout(5000)
+      OPENMCP_USE_FAKE_RUNTIME: "true"
+      OPENMCP_REGISTRY_BASE_URL: https://registry.modelcontextprotocol.io
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - openmcp-data:/data
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
@@ -14,6 +19,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    pids_limit: 100
-    mem_limit: 128m
+    pids_limit: 256
+    mem_limit: 512m
     restart: unless-stopped
+
+volumes:
+  openmcp-data:

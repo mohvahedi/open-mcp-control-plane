@@ -2,68 +2,77 @@
 
 An open-source, self-hosted control plane for discovering, evaluating, deploying, securing, and operating MCP servers and agent skills through one stable gateway.
 
-> **Status:** Early foundation. The APIs and repository structure will change before the first tagged release.
+> **Status:** v0.1 MVP backbone. APIs may still change before the first tagged release.
 
 ## Vision
 
-Turn the fragmented MCP ecosystem into one coherent workflow:
-
 **Discover → assess → approve → deploy → connect → observe → update or roll back**
 
-The project is designed to run on a single VPS with Docker and grow into a team or Kubernetes deployment without locking users into a proprietary registry, runtime, or gateway.
+## What works now
 
-## Interfaces
+- Go control-plane service with SQLite persistence
+- Official MCP Registry adapter + static bootstrap catalog
+- Deployment plans with default-deny policy findings
+- Explicit approvals for high-risk plans
+- Runtime abstraction with fake runtime (tests/dev) and Docker CLI adapter
+- Profiles, hashed gateway clients, and authenticated gateway tool routing
+- Admin bearer auth, CSRF helpers, readiness/health endpoints, audit events
+- Embedded operator dashboard
+- `mcpctl` CLI
+- Management MCP endpoint (`POST /mcp/management`)
 
-- A responsive web GUI for discovery, approvals, profiles, health, and logs
-- A built-in CLI for administrators and automation
-- A stable management MCP endpoint for agents
-- A unified Streamable HTTP gateway for downstream MCP servers
-
-## Current foundation
-
-The first branch establishes:
-
-- A dependency-free Go control-plane service
-- Health and version endpoints
-- A catalog source abstraction with normalized package metadata
-- Search and deduplication behavior
-- Unit tests
-- A minimal non-root container image
-- Docker Compose and CI foundations
-- Initial architecture and security documentation
-
-## Run locally
-
-Requires Go 1.22 or newer.
+## Quick start
 
 ```bash
+export GOTOOLCHAIN=local
 go test ./...
-go run ./cmd/controlplane
-curl http://localhost:8080/healthz
-curl 'http://localhost:8080/v1/catalog/search?q=postgres'
+go build -o bin/controlplane ./cmd/controlplane
+go build -o bin/mcpctl ./cmd/mcpctl
+
+OPENMCP_USE_FAKE_RUNTIME=true ./bin/controlplane
 ```
 
-## Run with Docker
+On first boot, if `OPENMCP_BOOTSTRAP_ADMIN_TOKEN` is unset, a one-time admin token is printed to logs. Store it securely.
+
+```bash
+export OPENMCP_URL=http://127.0.0.1:8080
+export OPENMCP_TOKEN='your-admin-token'
+./bin/mcpctl status
+./bin/mcpctl search postgres
+```
+
+## Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-The API listens on `http://localhost:8080` by default.
+API/GUI: `http://127.0.0.1:8080`
+
+## Core API surface
+
+- `GET /healthz`, `GET /readyz`, `GET /v1/info`
+- `GET /v1/catalog/search`, `GET /v1/catalog/packages/{id}`, `GET /v1/catalog/sources/status`
+- Admin: `/v1/admin/plans`, `/approvals`, `/installations`, `/profiles`, `/clients`, `/audit`, `/gateway/status`
+- Gateway: `GET /gateway/tools`, `POST /gateway/invoke`
+- Management MCP: `POST /mcp/management`
+
+## Security notes
+
+- Secrets and tokens are never returned by list/read endpoints
+- High-risk plans require approval before apply
+- Containers default to non-root / dropped caps / resource limits
+- Profile allowlists control which tools clients can invoke
+
+See [docs/security.md](docs/security.md) and [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
-1. Gateway feasibility and real-client compatibility
-2. Official MCP Registry and ToolHive catalog adapters
-3. Deployment plans, policy checks, and Docker lifecycle management
-4. Profiles and unified gateway routing
-5. CLI and web GUI
-6. Agent-facing management MCP
-7. Supply-chain security, observability, updates, and rollback
-
-## Contributing
-
-The project is at the architecture and feasibility stage. See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/architecture.md](docs/architecture.md), and [docs/security.md](docs/security.md).
+1. Full Streamable HTTP MCP transport parity and richer gateway protocol support
+2. Stronger secret encryption backend and OIDC identity
+3. Production GUI polish and package risk scoring
+4. Update/rollback workflows and image scanning
+5. Skills package model and ToolHive catalog federation
 
 ## License
 

@@ -1,16 +1,22 @@
-.PHONY: test run build fmt vet
+.PHONY: test race fmt vet build run cli
 
 test:
-	go test ./...
+	GOTOOLCHAIN=local go test ./...
 
-run:
-	go run ./cmd/controlplane
-
-build:
-	go build ./cmd/controlplane
+race:
+	GOTOOLCHAIN=local go test -race ./...
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
 
 vet:
-	go vet ./...
+	GOTOOLCHAIN=local go vet ./...
+
+build:
+	GOTOOLCHAIN=local go build -o bin/controlplane ./cmd/controlplane
+	GOTOOLCHAIN=local go build -o bin/mcpctl ./cmd/mcpctl
+
+cli: build
+
+run:
+	GOTOOLCHAIN=local OPENMCP_USE_FAKE_RUNTIME=true go run ./cmd/controlplane
