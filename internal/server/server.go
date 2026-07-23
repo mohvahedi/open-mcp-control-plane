@@ -78,6 +78,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/admin/clients/{id}/revoke", s.withAdminAuth(s.revokeClient))
 	s.mux.HandleFunc("GET /v1/admin/audit", s.withAdminAuth(s.listAudit))
 	s.mux.HandleFunc("GET /v1/admin/gateway/status", s.withAdminAuth(s.gatewayStatus))
+	s.mux.HandleFunc("GET /v1/admin/secrets", s.withAdminAuth(s.listSecrets))
+	s.mux.HandleFunc("POST /v1/admin/secrets", s.withAdminAuth(s.createSecret))
 
 	// management MCP
 	s.mux.HandleFunc("POST /mcp/management", s.withAdminAuth(s.managementMCP))
@@ -566,6 +568,54 @@ func (s *Server) withDefaults(next http.Handler) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
+	items, err := s.repo.ListSecretReferences(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list secrets"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createSecret(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Value       string `json:"value"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Name == "" || req.Value == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and value are required"})
+		return
+	}
+	key, err := security.DeriveKey(s.config.SecretsMasterKey)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "invalid secrets master key"})
+		return
+	}
+	ciphertext, err := security.EncryptSecret(key, req.Value)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encrypt secret"})
+		return
+	}
+	ref := domain.SecretReference{
+		ID:          newID("sec"),
+		Name:        req.Name,
+		Description: req.Description,
+		CreatedAt:   time.Now().UTC(),
+	}
+	stored, err := s.repo.CreateSecretReference(r.Context(), ref, ciphertext)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to store secret reference"})
+		return
+	}
+	s.audit(r.Context(), "admin", "create_secret", stored.ID, "ok", map[string]any{"name": stored.Name})
+	// Never return plaintext value.
+	writeJSON(w, http.StatusCreated, stored)
 }
 
 func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
