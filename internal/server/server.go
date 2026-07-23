@@ -88,6 +88,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/admin/gateway/status", s.withAdminAuth(s.gatewayStatus))
 	s.mux.HandleFunc("GET /v1/admin/secrets", s.withAdminAuth(s.listSecrets))
 	s.mux.HandleFunc("POST /v1/admin/secrets", s.withAdminAuth(s.createSecret))
+	s.mux.HandleFunc("GET /v1/admin/skills", s.withAdminAuth(s.listSkills))
+	s.mux.HandleFunc("POST /v1/admin/skills", s.withAdminAuth(s.createSkill))
+	s.mux.HandleFunc("GET /v1/admin/skills/{id}", s.withAdminAuth(s.getSkill))
+	s.mux.HandleFunc("DELETE /v1/admin/skills/{id}", s.withAdminAuth(s.deleteSkill))
+	s.mux.HandleFunc("GET /v1/admin/skill-bindings", s.withAdminAuth(s.listSkillBindings))
+	s.mux.HandleFunc("POST /v1/admin/skill-bindings", s.withAdminAuth(s.bindSkill))
+	s.mux.HandleFunc("DELETE /v1/admin/skill-bindings/{id}", s.withAdminAuth(s.unbindSkill))
+	s.mux.HandleFunc("GET /v1/skills", s.listSkillsPublic)
 
 	// management MCP
 	s.mux.HandleFunc("POST /mcp/management", s.withAdminAuth(s.managementMCP))
@@ -740,10 +748,12 @@ func (s *Server) gatewayStatus(w http.ResponseWriter, r *http.Request) {
 	inst, _ := s.repo.ListInstallations(r.Context())
 	prof, _ := s.repo.ListProfiles(r.Context())
 	clients, _ := s.repo.ListClients(r.Context())
+	skills, _ := s.repo.ListSkills(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"installations": len(inst),
 		"profiles":      len(prof),
 		"clients":       len(clients),
+		"skills":        len(skills),
 		"path":          "/gateway",
 		"endpoints": map[string]string{
 			"rest_tools":      "GET /gateway/tools",
@@ -794,6 +804,20 @@ func (s *Server) managementMCP(w http.ResponseWriter, r *http.Request) {
 		s.listInstallations(w, r)
 	case "check_health":
 		s.health(w, r)
+	case "list_skills":
+		s.listSkills(w, r)
+	case "create_skill":
+		body, _ := json.Marshal(req.Input)
+		r2 := r.Clone(ctx)
+		r2.Body = io.NopCloser(strings.NewReader(string(body)))
+		r2.Method = http.MethodPost
+		s.createSkill(w, r2)
+	case "bind_skill":
+		body, _ := json.Marshal(req.Input)
+		r2 := r.Clone(ctx)
+		r2.Body = io.NopCloser(strings.NewReader(string(body)))
+		r2.Method = http.MethodPost
+		s.bindSkill(w, r2)
 	case "scan_image":
 		img, _ := req.Input["image"].(string)
 		if img == "" {
